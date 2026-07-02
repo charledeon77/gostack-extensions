@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/charledeon77/gostack-framework/main/assets/images/gostack-3d-logo.png" alt="GoStack Logo" width="100%">
+  <img src="assets/images/GoStack-Extensions-Logo.jpg" alt="GoStack Extensions Logo" width="100%">
 </p>
 
 <p align="center">
