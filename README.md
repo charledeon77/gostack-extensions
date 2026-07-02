@@ -34,7 +34,6 @@ Every extension is built as a native Go Module utilizing GoStack's **ServiceProv
 | :--- | :--- | :--- | :--- |
 | **MFA / 2FA** | `/mfa` | Time-based One-Time Passwords (TOTP) QR code generation & verification. | ✅ Stable |
 | **RBAC** | `/rbac` | Database-backed Roles & Permissions table structure, route guards, and NoSQL/Cassandra resolvers. | ✅ Stable |
-| **SocialAuth** | `/social-auth` | OAuth2 providers (Google, GitHub, Apple) login integration. | 🗺️ Planned |
 
 ---
 
