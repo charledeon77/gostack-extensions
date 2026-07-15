@@ -250,3 +250,122 @@ func TestRBAC_Middlewares(t *testing.T) {
 		t.Errorf("expected unauthenticated API request to return 401 JSON, got code: %d, body: %s", w.Code, w.Body.String())
 	}
 }
+
+type mockPost struct {
+	ID       int
+	AuthorID int
+}
+
+func TestRBAC_PostgreSQLPlaceholder(t *testing.T) {
+	// Create mock postgres db adapter implementing contract.Database
+	mockDB := &mockPostgresDB{}
+	manager := NewManager(mockDB)
+
+	expectedRolesQuery := "SELECT r.name FROM roles r JOIN role_user ru ON r.id = ru.role_id WHERE ru.user_id = $1"
+	if manager.UserRolesQuery != expectedRolesQuery {
+		t.Errorf("expected UserRolesQuery to be %q, got %q", expectedRolesQuery, manager.UserRolesQuery)
+	}
+
+	expectedPermissionQuery := "SELECT p.name FROM permissions p JOIN permission_role pr ON p.id = pr.permission_id JOIN role_user ru ON pr.role_id = ru.role_id WHERE ru.user_id = $1"
+	if manager.UserPermissionQuery != expectedPermissionQuery {
+		t.Errorf("expected UserPermissionQuery to be %q, got %q", expectedPermissionQuery, manager.UserPermissionQuery)
+	}
+}
+
+type mockPostgresDB struct {
+	contract.Database
+}
+
+func (m *mockPostgresDB) Driver() string {
+	return "postgres"
+}
+
+func TestRBAC_SuperAdminBypass(t *testing.T) {
+	manager := NewManager(nil)
+	manager.AddBypassRole("superadmin")
+
+	// Assign superadmin role to user 99
+	manager.AssignRole(99, "superadmin")
+
+	// Superadmin should bypass HasRole check and have "editor" role implicitly
+	if !manager.HasRole(99, "editor") {
+		t.Error("expected superadmin to bypass and have editor role")
+	}
+
+	// Superadmin should bypass HasPermission check
+	if !manager.HasPermission(99, "delete-everything") {
+		t.Error("expected superadmin to bypass and have delete-everything permission")
+	}
+
+	// Double check that normal user 10 does not have these
+	if manager.HasRole(10, "editor") {
+		t.Error("expected normal user to not have editor role")
+	}
+	if manager.HasPermission(10, "delete-everything") {
+		t.Error("expected normal user to not have delete-everything permission")
+	}
+
+	// Remove bypass role from list and check that bypass functionality is gone
+	manager.RemoveBypassRole("superadmin")
+	if manager.HasRole(99, "editor") {
+		t.Error("expected bypass to fail after removing superadmin from bypass roles")
+	}
+}
+
+func TestRBAC_UserDirectPermissions(t *testing.T) {
+	manager := NewManager(nil)
+
+	// User 42 has no permissions initially
+	if manager.HasPermission(42, "read") {
+		t.Error("expected user 42 to not have read permission initially")
+	}
+
+	// Assign permission directly to user 42
+	manager.AssignPermissionToUser(42, "read")
+	if !manager.HasPermission(42, "read") {
+		t.Error("expected user 42 to have direct permission read")
+	}
+
+	// Remove permission directly from user 42
+	manager.RemovePermissionFromUser(42, "read")
+	if manager.HasPermission(42, "read") {
+		t.Error("expected user 42 to not have read permission after removal")
+	}
+}
+
+func TestRBAC_ContextualRules(t *testing.T) {
+	manager := NewManager(nil)
+
+	post1 := &mockPost{ID: 101, AuthorID: 5}
+	post2 := &mockPost{ID: 102, AuthorID: 6}
+
+	// Define contextual rule for edit-post
+	manager.DefineRule("edit-post", func(userID any, context ...any) bool {
+		if len(context) == 0 {
+			return false
+		}
+		post, ok := context[0].(*mockPost)
+		if !ok {
+			return false
+		}
+		// User can edit if they are the author
+		return post.AuthorID == userID
+	})
+
+	// User 5 should be able to edit post1
+	if !manager.HasPermission(5, "edit-post", post1) {
+		t.Error("expected author (user 5) to edit post1")
+	}
+
+	// User 5 should NOT be able to edit post2 (author is 6)
+	if manager.HasPermission(5, "edit-post", post2) {
+		t.Error("expected non-author (user 5) to be blocked from editing post2")
+	}
+
+	// Verify SuperAdmin bypasses the rule evaluation completely
+	manager.AddBypassRole("superadmin")
+	manager.AssignRole(99, "superadmin")
+	if !manager.HasPermission(99, "edit-post", post2) {
+		t.Error("expected superadmin to bypass edit-post rule and return true")
+	}
+}

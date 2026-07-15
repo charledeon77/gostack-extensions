@@ -17,6 +17,9 @@ type Manager struct {
 	db                  contract.Database
 	inMemRoles          map[string][]string // role -> permissions
 	inMemUserRoles      map[any][]string    // user ID -> roles
+	inMemUserPermissions map[any][]string   // user ID -> direct permissions (WordPress style)
+	bypassRoles         map[string]bool     // roles that bypass all checks (SuperAdmin style)
+	rules               map[string]func(userID any, context ...any) bool // contextual rules (WP map_meta_cap style)
 	useDB               bool
 	roleResolver        func(userID any) ([]string, error)
 	permissionResolver  func(userID any) ([]string, error)
@@ -26,13 +29,26 @@ type Manager struct {
 
 // NewManager creates a new instance of the RBAC Manager.
 func NewManager(db contract.Database) *Manager {
-	return &Manager{
+	m := &Manager{
 		db:                  db,
 		inMemRoles:          make(map[string][]string),
 		inMemUserRoles:      make(map[any][]string),
+		inMemUserPermissions: make(map[any][]string),
+		bypassRoles:         make(map[string]bool),
+		rules:               make(map[string]func(userID any, context ...any) bool),
 		UserRolesQuery:      "SELECT r.name FROM roles r JOIN role_user ru ON r.id = ru.role_id WHERE ru.user_id = ?",
 		UserPermissionQuery: "SELECT p.name FROM permissions p JOIN permission_role pr ON p.id = pr.permission_id JOIN role_user ru ON pr.role_id = ru.role_id WHERE ru.user_id = ?",
 	}
+
+	if db != nil {
+		driver := db.Driver()
+		if driver == "postgres" || driver == "cockroach" {
+			m.UserRolesQuery = "SELECT r.name FROM roles r JOIN role_user ru ON r.id = ru.role_id WHERE ru.user_id = $1"
+			m.UserPermissionQuery = "SELECT p.name FROM permissions p JOIN permission_role pr ON p.id = pr.permission_id JOIN role_user ru ON pr.role_id = ru.role_id WHERE ru.user_id = $1"
+		}
+	}
+
+	return m
 }
 
 // SetUseDB enables or disables database lookups for roles and permissions.
@@ -56,6 +72,51 @@ func (m *Manager) SetPermissionResolver(fn func(userID any) ([]string, error)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.permissionResolver = fn
+}
+
+// AddBypassRole registers a role name that will bypass all role/permission checks.
+func (m *Manager) AddBypassRole(role string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bypassRoles[role] = true
+}
+
+// RemoveBypassRole removes a role name from the bypass roles list.
+func (m *Manager) RemoveBypassRole(role string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.bypassRoles, role)
+}
+
+// AssignPermissionToUser assigns a specific permission directly to a user ID.
+func (m *Manager) AssignPermissionToUser(userID any, permission string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inMemUserPermissions[userID] = append(m.inMemUserPermissions[userID], permission)
+}
+
+// RemovePermissionFromUser removes a specific permission directly from a user ID.
+func (m *Manager) RemovePermissionFromUser(userID any, permission string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	permissions, ok := m.inMemUserPermissions[userID]
+	if !ok {
+		return
+	}
+	var updated []string
+	for _, p := range permissions {
+		if p != permission {
+			updated = append(updated, p)
+		}
+	}
+	m.inMemUserPermissions[userID] = updated
+}
+
+// DefineRule registers a contextual callback rule for a specific permission.
+func (m *Manager) DefineRule(permission string, rule func(userID any, context ...any) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rules[permission] = rule
 }
 
 // DefineRole associates a role with a slice of permissions.
@@ -89,11 +150,9 @@ func (m *Manager) RemoveRole(userID any, role string) {
 	m.inMemUserRoles[userID] = updated
 }
 
-// HasRole checks if the given user ID carries the specified role.
-func (m *Manager) HasRole(userID any, role string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+// hasRoleRLocked checks if the user has a role, assuming the read lock is already held.
+// It does NOT evaluate bypass roles to avoid infinite recursion.
+func (m *Manager) hasRoleRLocked(userID any, role string) bool {
 	// 1. Check custom role resolver first (e.g. for Cassandra/NoSQL engines)
 	if m.roleResolver != nil {
 		roles, err := m.roleResolver(userID)
@@ -134,12 +193,53 @@ func (m *Manager) HasRole(userID any, role string) bool {
 	return false
 }
 
-// HasPermission checks if the given user ID is authorized with the specified permission.
-func (m *Manager) HasPermission(userID any, permission string) bool {
+// HasRole checks if the given user ID carries the specified role.
+func (m *Manager) HasRole(userID any, role string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 1. Check custom permission resolver first (e.g. for Cassandra/NoSQL engines)
+	// If the requested role is a bypass role itself, check if they explicitly carry it
+	if m.bypassRoles[role] {
+		return m.hasRoleRLocked(userID, role)
+	}
+
+	// Otherwise, if they carry any bypass role, they automatically have this role
+	for bypassRole := range m.bypassRoles {
+		if m.hasRoleRLocked(userID, bypassRole) {
+			return true
+		}
+	}
+
+	return m.hasRoleRLocked(userID, role)
+}
+
+// HasPermission checks if the given user ID is authorized with the specified permission.
+func (m *Manager) HasPermission(userID any, permission string, context ...any) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// 1. Check if user has any bypass role (SuperAdmin style)
+	for bypassRole := range m.bypassRoles {
+		if m.hasRoleRLocked(userID, bypassRole) {
+			return true
+		}
+	}
+
+	// 2. Check if a dynamic callback rule is registered for this permission (WordPress map_meta_cap style)
+	if rule, ok := m.rules[permission]; ok {
+		return rule(userID, context...)
+	}
+
+	// 3. Check in-memory user direct permissions (WordPress user capabilities style)
+	if permissions, ok := m.inMemUserPermissions[userID]; ok {
+		for _, p := range permissions {
+			if p == permission {
+				return true
+			}
+		}
+	}
+
+	// 4. Check custom permission resolver first (e.g. for Cassandra/NoSQL engines)
 	if m.permissionResolver != nil {
 		permissions, err := m.permissionResolver(userID)
 		if err == nil {
@@ -151,7 +251,7 @@ func (m *Manager) HasPermission(userID any, permission string) bool {
 		}
 	}
 
-	// 2. Resolve roles to check permissions in-memory
+	// 5. Resolve roles to check permissions in-memory
 	var roles []string
 
 	// Load roles from custom resolver
@@ -193,7 +293,7 @@ func (m *Manager) HasPermission(userID any, permission string) bool {
 		}
 	}
 
-	// 3. Fall back to custom user direct permissions lookup in SQL database
+	// 6. Fall back to custom user direct permissions lookup in SQL database
 	if m.useDB && m.db != nil {
 		rowsObj, err := m.db.Query(m.UserPermissionQuery, userID)
 		if err == nil {
@@ -213,8 +313,8 @@ func (m *Manager) HasPermission(userID any, permission string) bool {
 }
 
 // Check is a generic alias checking if a user has a specific permission.
-func (m *Manager) Check(userID any, permission string) bool {
-	return m.HasPermission(userID, permission)
+func (m *Manager) Check(userID any, permission string, context ...any) bool {
+	return m.HasPermission(userID, permission, context...)
 }
 
 // ─── MIDDLEWARES ─────────────────────────────────────────────────────────────
