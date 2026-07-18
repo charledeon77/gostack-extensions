@@ -34,6 +34,7 @@ Every extension is built as a native Go Module utilizing GoStack's **ServiceProv
 | :--- | :--- | :--- | :--- |
 | **MFA / 2FA** | `/mfa` | Time-based One-Time Passwords (TOTP) QR code generation & verification. | ✅ Stable |
 | **RBAC** | `/rbac` | Database-backed Roles & Permissions table structure, route guards, and NoSQL/Cassandra resolvers. | ✅ Stable |
+| **JWT Auth** | `/jwt` | Stateless JWT token validation, bearer token extraction, and route guard middleware. | ✅ Stable |
 
 ---
 
@@ -49,6 +50,11 @@ go get github.com/charledeon77/gostack-extensions/mfa
 ### RBAC (Role-Based Access Control)
 ```bash
 go get github.com/charledeon77/gostack-extensions/rbac
+```
+
+### JWT Authentication
+```bash
+go get github.com/charledeon77/gostack-extensions/jwt
 ```
 
 ---
