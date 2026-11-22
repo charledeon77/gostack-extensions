@@ -29,6 +29,7 @@ In modern web frameworks like **Laravel (Packages)**, **Django (Apps)**, and **N
 | **MFA / 2FA** | `/mfa` | Time-based One-Time Passwords (TOTP) QR code generation & verification. | `mfa/v1.0.0` |
 | **RBAC** | `/rbac` | Database-backed Roles & Permissions table structure, route guards, and NoSQL/Cassandra resolvers. | `rbac/v1.0.1` |
 | **JWT Auth** | `/jwt` | Stateless JWT token validation, bearer token extraction, and route guard middleware. | `jwt/v1.0.0` |
+| **AI Toolkit** | `/ai` | PostgreSQL vector embeddings (pgvector), PromptTemplate composition, and Model Context Protocol (MCP) server. | `ai/v1.0.0` |
 
 ---
 
@@ -201,6 +202,28 @@ func GetProfile(ctx *http.Context) error {
 	}
 	return ctx.JSON(200, map[string]string{"user_id": claims.UserID})
 }
+```
+
+---
+
+## 🤖 4. AI Toolkit Extension (`gostack-extensions/ai`)
+
+### What it is
+The AI extension provides the foundational data, retrieval, prompt composition, and agent tooling layer for GoStack applications:
+* **PostgreSQL Vector Embeddings (`pgvector`)**: Native `Vector` type implementing `sql.Scanner` and `driver.Valuer`, distance metric operators (`<=>`, `<->`, `<#>`), and parameterized similarity query generation for Crafter.
+* **PromptTemplate Composition**: Reusable, named prompt templates with built-in formatting helpers (`indent`, `trim`, `upper`, `truncate`, `default`) and the `.AsContext()` seamless bridge from vector search results.
+* **Model Context Protocol (MCP) Server**: A standards-compliant JSON-RPC 2.0 endpoint enabling AI coding assistants (Claude Code, Cursor, Windsurf, Antigravity) to securely call application tools and inspect models.
+* **Streaming Architecture**: Documented pattern for piping application LLM token streams directly through GoStack's native **GowSocket** WebSocket hub for zero-latency UI reactivity.
+
+### Installation
+```bash
+go get github.com/charledeon77/gostack-extensions/ai@ai/v1.0.0
+```
+
+### Setup & Usage
+Register the provider during application bootstrap:
+```go
+app.RegisterProvider(ai.NewServiceProvider())
 ```
 
 ---
