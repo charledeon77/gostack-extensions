@@ -30,6 +30,7 @@ In modern web frameworks like **Laravel (Packages)**, **Django (Apps)**, and **N
 | **RBAC** | `/rbac` | Database-backed Roles & Permissions table structure, route guards, and NoSQL/Cassandra resolvers. | `rbac/v1.0.1` |
 | **JWT Auth** | `/jwt` | Stateless JWT token validation, bearer token extraction, and route guard middleware. | `jwt/v1.0.0` |
 | **AI Toolkit** | `/ai` | PostgreSQL vector embeddings (pgvector), PromptTemplate composition, and Model Context Protocol (MCP) server. | `ai/v1.0.0` |
+| **AI MongoDB** | `/ai-mongo` | MongoDB Atlas Vector Search adapter implementing the `ai.VectorStore` contract. | `ai-mongo/v1.0.0` |
 
 ---
 
@@ -224,6 +225,45 @@ go get github.com/charledeon77/gostack-extensions/ai@ai/v1.0.0
 Register the provider during application bootstrap:
 ```go
 app.RegisterProvider(ai.NewServiceProvider())
+```
+
+---
+
+## 🍃 5. AI MongoDB Adapter (`gostack-extensions/ai-mongo`)
+
+### What it is
+The MongoDB Atlas Vector Search adapter implements GoStack's `ai.VectorStore` contract on top of MongoDB Atlas `$vectorSearch` aggregations:
+* **Atlas Vector Search**: Native integration with `$vectorSearch` pipeline stage and index-level metadata pre-filtering.
+* **BulkWrite Batch Upserts**: `StoreBatch` executes high-throughput bulk upserts with zero client-side N+1 round trips.
+* **Atlas Index JSON Helper**: `store.AtlasIndexJSON(dimensions)` generates the ready-to-paste Atlas index definition JSON for the Atlas UI or CLI.
+* **Shared Types**: Works seamlessly with `ai.Document`, `ai.Vector`, `ai.SearchOptions`, and `ai.SearchResults`.
+
+### Installation
+```bash
+go get github.com/charledeon77/gostack-extensions/ai@ai/v1.0.0
+go get github.com/charledeon77/gostack-extensions/ai-mongo@ai-mongo/v1.0.0
+```
+
+### Setup & Usage
+```go
+import (
+    "go.mongodb.org/mongo-driver/mongo"
+    "github.com/charledeon77/gostack-extensions/ai"
+    aimongo "github.com/charledeon77/gostack-extensions/ai-mongo"
+)
+
+coll := mongoClient.Database("myapp").Collection("knowledge_base")
+store := aimongo.NewMongoVectorStore(coll, aimongo.Options{
+    EmbeddingField: "embedding",
+    IndexName:      "vector_index",
+})
+
+// Use store with the same ai.VectorStore interface:
+err := store.Store(ctx, ai.Document{
+    ID:        "doc-1",
+    Content:   "GoStack with MongoDB Atlas Vector Search",
+    Embedding: embeddingVector,
+})
 ```
 
 ---
